@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common/hbbs/hbbs.dart';
 import 'package:flutter_hbb/common/widgets/peers_view.dart';
+import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/models/model.dart';
 import 'package:flutter_hbb/models/peer_model.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
@@ -16,21 +17,23 @@ import '../common.dart';
 
 final syncAbOption = 'sync-ab-with-recent-sessions';
 bool shouldSyncAb() {
-  return bind.mainGetLocalOption(key: syncAbOption).isNotEmpty;
+  return bind.mainGetLocalOption(key: syncAbOption) == 'Y';
 }
 
 final sortAbTagsOption = 'sync-ab-tags';
 bool shouldSortTags() {
-  return bind.mainGetLocalOption(key: sortAbTagsOption).isNotEmpty;
+  return bind.mainGetLocalOption(key: sortAbTagsOption) == 'Y';
 }
 
 final filterAbTagOption = 'filter-ab-by-intersection';
 bool filterAbTagByIntersection() {
-  return bind.mainGetLocalOption(key: filterAbTagOption).isNotEmpty;
+  return bind.mainGetLocalOption(key: filterAbTagOption) == 'Y';
 }
 
 const _personalAddressBookName = "My address book";
 const _legacyAddressBookName = "Legacy address book";
+
+const kUntagged = "Untagged";
 
 enum ForcePullAb {
   listAndCurrent,
@@ -65,10 +68,16 @@ class AbModel {
   var listInitialized = false;
   var _maxPeerOneAb = 0;
 
+  late final Peers peersModel;
+
   WeakReference<FFI> parent;
 
   AbModel(this.parent) {
     addressbooks.clear();
+    peersModel = Peers(
+        name: PeersModelName.addressBook,
+        getInitPeers: () => currentAbPeers,
+        loadEvent: LoadEvent.addressBook);
     if (desktopType == DesktopType.main) {
       Timer.periodic(Duration(milliseconds: 500), (timer) async {
         if (_timerCounter++ % 6 == 0) {
@@ -84,7 +93,7 @@ class AbModel {
   reset() async {
     print("reset ab model");
     addressbooks.clear();
-    setCurrentName('');
+    _currentName.value = '';
     await bind.mainClearAb();
     listInitialized = false;
   }
@@ -110,9 +119,10 @@ class AbModel {
   Future<void> _pullAb(
       {required ForcePullAb? force, required bool quiet}) async {
     if (bind.isDisableAb()) return;
-    debugPrint("pullAb, force: $force, quiet: $quiet");
     if (!gFFI.userModel.isLogin) return;
+    if (gFFI.userModel.networkError.isNotEmpty) return;
     if (force == null && listInitialized && current.initialized) return;
+    debugPrint("pullAb, force: $force, quiet: $quiet");
     if (!listInitialized || force == ForcePullAb.listAndCurrent) {
       try {
         // Read personal guid every time to avoid upgrading the server without closing the main window
@@ -416,6 +426,7 @@ class AbModel {
 
 // #region tags
   Future<bool> addTags(List<String> tagList) async {
+    tagList.removeWhere((e) => e == kUntagged);
     final ret = await current.addTags(tagList, {});
     await pullNonLegacyAfterChange();
     _saveCache();
@@ -509,7 +520,8 @@ class AbModel {
   }
 
   void setShouldAsync(bool v) async {
-    await bind.mainSetLocalOption(key: syncAbOption, value: v ? 'Y' : '');
+    await bind.mainSetLocalOption(
+        key: syncAbOption, value: v ? 'Y' : defaultOptionNo);
     _syncAllFromRecent = true;
     _timerCounter = 0;
   }
@@ -548,7 +560,7 @@ class AbModel {
   }
 
   trySetCurrentToLast() {
-    final name = bind.getLocalFlutterOption(k: 'current-ab-name');
+    final name = bind.getLocalFlutterOption(k: kOptionCurrentAbName);
     if (addressbooks.containsKey(name)) {
       _currentName.value = name;
     }
@@ -636,6 +648,9 @@ class AbModel {
   }
 
   Color getCurrentAbTagColor(String tag) {
+    if (tag == kUntagged) {
+      return MyTheme.accent;
+    }
     int? colorValue = current.tagColors[tag];
     if (colorValue != null) {
       return Color(colorValue);
@@ -645,6 +660,10 @@ class AbModel {
 
   List<String> addressBookNames() {
     return addressbooks.keys.toList();
+  }
+
+  String personalAddressBookName() {
+    return _personalAddressBookName;
   }
 
   Future<void> setCurrentName(String name) async {
@@ -809,8 +828,6 @@ abstract class BaseAb {
 }
 
 class LegacyAb extends BaseAb {
-  final sortTags = shouldSortTags().obs;
-  final filterByIntersection = filterAbTagByIntersection().obs;
   bool get emtpy => peers.isEmpty && tags.isEmpty;
   // licensedDevices is obtained from personal ab, shared ab restrict it in server
   var licensedDevices = 0;
@@ -1203,8 +1220,6 @@ class LegacyAb extends BaseAb {
 class Ab extends BaseAb {
   AbProfile profile;
   late final bool personal;
-  final sortTags = shouldSortTags().obs;
-  final filterByIntersection = filterAbTagByIntersection().obs;
   bool get emtpy => peers.isEmpty && tags.isEmpty;
 
   Ab(this.profile, this.personal);
